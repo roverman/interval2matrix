@@ -5,6 +5,7 @@ import sys
 import vcf
 import argparse
 import math
+import os
 
 from bx.intervals.intersection import Intersecter, Interval
 
@@ -168,6 +169,83 @@ BED_START  = 1
 BED_STOP   = 2
 BED_SAMPLE = 3
 BED_VALUE  = 4
+
+def transformBED(gtf, bed, matrix):
+    if not os.path.isfile(gtf):
+        gaf = gtf.replace("gtf", "gaf")
+        os.system("wget -O %s https://tcga-data.nci.nih.gov/tcgafiles/ftp_auth/distro_ftpusers/anonymous/other/GAF/GAF4.0/geneSet.v4_0.gaf" % gaf)
+        os.system("python gaf2gtf.py %s > %s" % (gaf, gtf))
+    handle = open(gtf)
+    g = GTFMap()
+    g.read(handle)
+    i_map = {}
+    
+    for gene_name in g:
+        gene = g[gene_name]
+        if gene.seqname.startswith("chr"):
+            seqname = gene.seqname[3:]
+        else:
+            seqname = gene.seqname
+        if seqname not in i_map:
+            i_map[seqname] = Intersecter()
+        i_map[seqname].add_interval( Interval(gene.start, gene.end, value=gene) )
+    
+    missing = {}
+    samples = {}
+    values = {}
+    spans = {}
+    with open(bed) as handle:
+        for line in handle:
+            row = line.split("\t")
+            chrom = row[BED_SEQ]
+            if chrom.startswith('chr'):
+                chrom = chrom[3:]
+            if chrom in i_map:
+                start = long(row[BED_START])
+                stop = long(row[BED_STOP])
+                for hit in i_map[chrom].find(start, stop+1):
+                    gene = hit.value
+                    gene_name = gene.gene_id
+                    sample = row[BED_SAMPLE]
+                    if gene_name not in values:
+                        values[gene_name] = {}
+                        spans[gene_name] = {}
+                    samples[sample] = True
+                    new_value = float(row[BED_VALUE])
+                    span = float(min(stop, hit.end) - max(start, hit.start)) / float(hit.end - hit.start)
+                    if span > 0.0:
+                        new_value = math.pow(2,new_value)
+                        values[gene_name][sample] = values[gene_name].get(sample, []) + [ new_value ]
+                        spans[gene_name][sample] = spans[gene_name].get(sample, []) + [span]
+
+            else:
+                if chrom not in missing:
+                    sys.stderr.write("Missing Chrome %s\n" %(chrom))
+                    missing[chrom] = True
+
+    out = open(matrix, "w")
+    head = sorted(samples.keys())
+    out.write("probe\t%s\n" % ("\t".join(head) ))
+    for symbol in sorted(values.keys()):
+        cur_values = values[symbol]
+        cur_spans = spans[symbol]
+        row = []
+        for c in head:
+            if c in cur_values:
+                cv = cur_values.get(c)
+                cs = cur_spans.get(c)
+                assert sum(cs) <= 1.0
+                value = 0.0
+                for v, s in zip( cv, cs ):
+                    value += v * s
+                value /= sum(cs)
+                value = math.log(value,2)
+                row.append("%f" % (value))
+            else:
+                row.append('NA')
+        out.write("%s\t%s\n" % (symbol, "\t".join(row)))
+    
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
