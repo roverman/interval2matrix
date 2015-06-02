@@ -169,104 +169,27 @@ BED_START  = 1
 BED_STOP   = 2
 BED_SAMPLE = 3
 BED_VALUE  = 4
+GAF_PATH = "https://tcga-data.nci.nih.gov/tcgafiles/ftp_auth/distro_ftpusers/anonymous/other/GAF/GAF4.0/geneSet.v4_0.gaf"
 
 def transformBED(gtf, bed, matrix):
     if not os.path.isfile(gtf):
         gaf = gtf.replace("gtf", "gaf")
-        os.system("wget -O %s https://tcga-data.nci.nih.gov/tcgafiles/ftp_auth/distro_ftpusers/anonymous/other/GAF/GAF4.0/geneSet.v4_0.gaf" % gaf)
+        os.system("wget -O %s %s" % (gaf, GAF_PATH))
         os.system("python gaf2gtf.py %s > %s" % (gaf, gtf))
+    transform(gtf, False, True, True, None, bed, matrix)
+ 
+#gtf is gtf file name with path, exon, fix_chrome and log2_ave are boolean values, vcf, bed and outfile are file names with path   
+def transform(gtf, exon, fix_chrome, log2_ave, vcf, bed, outfile):
+    #load the gene or exon intervals
     handle = open(gtf)
     g = GTFMap()
     g.read(handle)
-    i_map = {}
-    
-    for gene_name in g:
-        gene = g[gene_name]
-        if gene.seqname.startswith("chr"):
-            seqname = gene.seqname[3:]
-        else:
-            seqname = gene.seqname
-        if seqname not in i_map:
-            i_map[seqname] = Intersecter()
-        i_map[seqname].add_interval( Interval(gene.start, gene.end, value=gene) )
-    
-    missing = {}
-    samples = {}
-    values = {}
-    spans = {}
-    with open(bed) as handle:
-        for line in handle:
-            row = line.split("\t")
-            chrom = row[BED_SEQ]
-            if chrom.startswith('chr'):
-                chrom = chrom[3:]
-            if chrom in i_map:
-                start = long(row[BED_START])
-                stop = long(row[BED_STOP])
-                for hit in i_map[chrom].find(start, stop+1):
-                    gene = hit.value
-                    gene_name = gene.gene_id
-                    sample = row[BED_SAMPLE]
-                    if gene_name not in values:
-                        values[gene_name] = {}
-                        spans[gene_name] = {}
-                    samples[sample] = True
-                    new_value = float(row[BED_VALUE])
-                    span = float(min(stop, hit.end) - max(start, hit.start)) / float(hit.end - hit.start)
-                    if span > 0.0:
-                        new_value = math.pow(2,new_value)
-                        values[gene_name][sample] = values[gene_name].get(sample, []) + [ new_value ]
-                        spans[gene_name][sample] = spans[gene_name].get(sample, []) + [span]
-
-            else:
-                if chrom not in missing:
-                    sys.stderr.write("Missing Chrome %s\n" %(chrom))
-                    missing[chrom] = True
-
-    out = open(matrix, "w")
-    head = sorted(samples.keys())
-    out.write("probe\t%s\n" % ("\t".join(head) ))
-    for symbol in sorted(values.keys()):
-        cur_values = values[symbol]
-        cur_spans = spans[symbol]
-        row = []
-        for c in head:
-            if c in cur_values:
-                cv = cur_values.get(c)
-                cs = cur_spans.get(c)
-                assert sum(cs) <= 1.0
-                value = 0.0
-                for v, s in zip( cv, cs ):
-                    value += v * s
-                value /= sum(cs)
-                value = math.log(value,2)
-                row.append("%f" % (value))
-            else:
-                row.append('NA')
-        out.write("%s\t%s\n" % (symbol, "\t".join(row)))
-    
-    
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-gtf', dest='gft', help="GTF definition of genes", required=True)
-    parser.add_argument('-exon', dest='exon', action="store_true", default=False)
-    parser.add_argument('--fix-chrome', action="store_true", default=False)
-    parser.add_argument('--log2-ave', action="store_true", help="The values are in log2 space, average 2^value", default=False)
-    parser.add_argument('-vcf', dest='vcf', default=None)
-    parser.add_argument('-bed', dest='bed', default=None)
-    args = parser.parse_args()
-
-    #load the gene or exon intervals
-    handle = open(args.gft)
-    g = GTFMap()
-    g.read(handle)
 
     i_map = {}
-    if args.exon:
+    if exon:
         for gene_name in g:
             gene = g[gene_name]
-            if args.fix_chrome and gene.seqname.startswith("chr"):
+            if fix_chrome and gene.seqname.startswith("chr"):
                 seqname = gene.seqname[3:]
             else:
                 seqname = gene.seqname
@@ -277,7 +200,7 @@ if __name__ == "__main__":
     else:
         for gene_name in g:
             gene = g[gene_name]
-            if args.fix_chrome and gene.seqname.startswith("chr"):
+            if fix_chrome and gene.seqname.startswith("chr"):
                 seqname = gene.seqname[3:]
             else:
                 seqname = gene.seqname
@@ -286,15 +209,15 @@ if __name__ == "__main__":
             i_map[seqname].add_interval( Interval(gene.start, gene.end, value=gene) )
 
 
-    if args.vcf is not None:
-        handle = open(args.vcf)
+    if vcf is not None:
+        handle = open(vcf)
 
         missing = {}
         samples = {}
         v_read = vcf.Reader(handle)
         for rec in v_read:
             chrom = rec.CHROM
-            if args.fix_chrome and rec.CHROM.startswith("chr"):
+            if fix_chrome and rec.CHROM.startswith("chr"):
                 chrom = rec.CHROM[3:]
             else:
                 chrom = rec.CHROM
@@ -315,7 +238,7 @@ if __name__ == "__main__":
                     sys.stderr.write("Missing Chrome %s\n" %(chrom))
                     missing[chrom] = True
 
-        out = sys.stdout
+        out = open(outfile, "w")
         head = sorted(samples.keys())
         out.write("probe\t%s\n" % ("\t".join(head) ))
         for symbol in mut_count:
@@ -325,16 +248,16 @@ if __name__ == "__main__":
                 row.append("%d" % (cur.get(c, 0)))
             out.write("%s\t%s\n" % (symbol, "\t".join(row)))
 
-    if args.bed is not None:
+    if bed is not None:
         missing = {}
         samples = {}
         values = {}
         spans = {}
-        with open(args.bed) as handle:
+        with open(bed) as handle:
             for line in handle:
                 row = line.split("\t")
                 chrom = row[BED_SEQ]
-                if args.fix_chrome and chrom.startswith('chr'):
+                if fix_chrome and chrom.startswith('chr'):
                     chrom = chrom[3:]
                 if chrom in i_map:
                     start = long(row[BED_START])
@@ -350,7 +273,7 @@ if __name__ == "__main__":
                         new_value = float(row[BED_VALUE])
                         span = float(min(stop, hit.end) - max(start, hit.start)) / float(hit.end - hit.start)
                         if span > 0.0:
-                            if args.log2_ave:
+                            if log2_ave:
                                 new_value = math.pow(2,new_value)
                             values[gene_name][sample] = values[gene_name].get(sample, []) + [ new_value ]
                             spans[gene_name][sample] = spans[gene_name].get(sample, []) + [span]
@@ -360,7 +283,7 @@ if __name__ == "__main__":
                         sys.stderr.write("Missing Chrome %s\n" %(chrom))
                         missing[chrom] = True
 
-        out = sys.stdout
+        out = open(outfile, "w")
         head = sorted(samples.keys())
         out.write("probe\t%s\n" % ("\t".join(head) ))
         for symbol in sorted(values.keys()):
@@ -376,9 +299,23 @@ if __name__ == "__main__":
                     for v, s in zip( cv, cs ):
                         value += v * s
                     value /= sum(cs)
-                    if args.log2_ave:
+                    if log2_ave:
                         value = math.log(value,2)
                     row.append("%f" % (value))
                 else:
                     row.append('NA')
-            out.write("%s\t%s\n" % (symbol, "\t".join(row)))
+            out.write("%s\t%s\n" % (symbol, "\t".join(row)))    
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-gtf', dest='gft', help="GTF definition of genes", required=True)
+    parser.add_argument('-exon', dest='exon', action="store_true", default=False)
+    parser.add_argument('--fix-chrome', action="store_true", default=False)
+    parser.add_argument('--log2-ave', action="store_true", help="The values are in log2 space, average 2^value", default=False)
+    parser.add_argument('-vcf', dest='vcf', default=None)
+    parser.add_argument('-bed', dest='bed', default=None)
+    parser.add_argument('-out', dest='outfile', default="Matrix.file", required=True)
+    args = parser.parse_args()
+    
+    transform(args.gft, args.exon, args.fix_chrome, args.log2_ave, args.vcf, args.bed, args.outfile)
+
